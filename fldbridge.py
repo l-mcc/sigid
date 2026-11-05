@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # fldbridge: fldigi <-> rspdx. Pretends to be flrig (XML-RPC) and feeds rspdx's Digital out into a PulseAudio null sink.
 # fldigi: ./fldigi-setup.sh once, then start it with PULSE_SOURCE=sigid.monitor (start.sh does both).
-import argparse, json, logging, os, re, shutil, signal, socket, subprocess, sys, threading
+import argparse, json, logging, os, re, shutil, signal, socket, subprocess, sys, threading, xmlrpc.client
 from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 
 log = logging.getLogger("fldbridge")
@@ -148,6 +148,33 @@ class Sink:	# PulseAudio null sink fed from rspdx's Digital out (UDP, 48 kHz s16
 		s.cat.terminate()
 		subprocess.run(["pactl", "unload-module", s.mod])
 
+class Fldigi:	# fldigi as a child, recording from the sink's monitor; closing its window ends the bridge
+	def __init__(s, sink):
+		s.closing = False
+		env = dict(os.environ, PULSE_SOURCE=f"{sink}.monitor")	# no pavucontrol
+		s.p = subprocess.Popen(["fldigi"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+		threading.Thread(target=s.watch, daemon=True).start()
+
+	def watch(s):
+		s.p.wait()
+		if not s.closing:
+			log.info("fldigi closed")
+			os.kill(os.getpid(), signal.SIGTERM)
+
+	def close(s):
+		s.closing = True
+		if s.p.poll() is not None:
+			return
+		try:	# fldigi's own XML-RPC server: quit saving options, log and macros, as File > Exit would
+			xmlrpc.client.ServerProxy("http://127.0.0.1:7362").fldigi.terminate(7)
+		except (OSError, xmlrpc.client.Error):
+			pass	# no server or it hung up mid-reply; the wait decides
+		try:
+			s.p.wait(10)
+		except subprocess.TimeoutExpired:
+			log.info("fldigi didn't quit; terminating it")
+			s.p.terminate()
+
 def interrupt(*_):	# SIGTERM (or rspdx dying) takes the Ctrl-C exit path
 	raise KeyboardInterrupt
 
@@ -162,6 +189,7 @@ def main():
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state; rspdx starts at 50 5")
 	ap.add_argument("--vol", type=float, help="speaker volume 0-2; Digital out is taken before it")
 	ap.add_argument("-m", "--mute", action="store_true", help="speaker volume 0")
+	ap.add_argument("-f", "--fldigi", action="store_true", help="start fldigi too, and quit it on exit")
 	ap.add_argument("-v", "--verbose", action="count", default=0, help="-v also fldigi's polling, -vv also raw XML-RPC")
 	a = ap.parse_args()
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -176,6 +204,7 @@ def main():
 	rx = Rx(a.mhz, a.mode, setup)
 	srv = Server(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose > 1)
 	srv.register_instance(Flrig(rx))
+	fl = Fldigi(a.sink) if a.fldigi else None
 	log.info(f"{a.mhz:.6f} MHz {a.mode}, flrig on 127.0.0.1:{a.port}, audio on sink '{a.sink}'")
 	try:
 		srv.serve_forever()
@@ -184,6 +213,8 @@ def main():
 	finally:
 		signal.signal(signal.SIGTERM, signal.SIG_IGN)	# a second TERM mustn't cut cleanup short
 		srv.server_close()
+		if fl:
+			fl.close()
 		rx.close()
 		sink.close()
 
