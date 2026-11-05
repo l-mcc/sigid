@@ -44,7 +44,7 @@ class Reader:	# drains cf32 from rspdx or a file on its own thread so the RSPdx 
 				s.base += len(s.chunks.popleft())
 			backlog = (s.end - start - n) / s.rate
 			x = np.concatenate(s.chunks)[start - s.base:start - s.base + n]
-		if backlog > 30:
+		if backlog > 30 and s.live:	# a replay reads ahead on purpose
 			log.warning(f"falling behind: {backlog:.0f} s of I/Q waiting")
 		return x
 
