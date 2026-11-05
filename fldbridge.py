@@ -2,7 +2,7 @@
 # fldbridge: fldigi <-> rspdx. Pretends to be flrig (XML-RPC) and feeds rspdx's Digital out into a PulseAudio null sink.
 # fldigi: Rig Control > flrig, 127.0.0.1:12345; Audio > PulseAudio, capture = "Monitor of sigid".
 import argparse, json, logging, os, shutil, signal, socket, subprocess, sys, threading
-from xmlrpc.server import SimpleXMLRPCServer
+from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 
 log = logging.getLogger("fldbridge")
 RSPDX = shutil.which("rspdx") or sys.exit("rspdx not found on PATH; build and install it from the radio repo")
@@ -70,7 +70,11 @@ class Flrig:	# the slice of flrig's API fldigi uses; unknown methods are logged 
 				s.unknown.add(method)
 				log.info(f"unhandled {method}{tuple(params)}")
 			return 0
-		r = f(*params)
+		try:
+			r = f(*params)
+		except Exception:
+			log.exception(f"{method}{tuple(params)}")
+			raise
 		log.debug(f"{method}{tuple(params)} -> {r!r}")
 		return r
 
@@ -99,6 +103,9 @@ class Flrig:	# the slice of flrig's API fldigi uses; unknown methods are logged 
 			s.rx.set_mode(m)
 		return 0
 	rig_set_verify_mode = rig_set_mode
+
+class AnyPath(SimpleXMLRPCRequestHandler):
+	rpc_paths = ()	# accept POSTs to any path, not just / and /RPC2
 
 class Sink:	# PulseAudio null sink fed from rspdx's Digital out (UDP, 48 kHz s16le mono)
 	def __init__(s, name, port):
@@ -152,7 +159,7 @@ def main():
 	if a.gain: setup.append(f"g {a.gain[0]} {a.gain[1]}")
 	if a.mute or a.vol is not None: setup.append(f"v {0 if a.mute else a.vol}")
 	rx = Rx(a.mhz, a.mode, setup)
-	srv = SimpleXMLRPCServer(("127.0.0.1", a.port), allow_none=False, logRequests=False)
+	srv = SimpleXMLRPCServer(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose)
 	srv.register_instance(Flrig(rx))
 	log.info(f"{a.mhz:.6f} MHz {a.mode}, flrig on 127.0.0.1:{a.port}, audio on sink '{a.sink}'")
 	try:
