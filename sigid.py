@@ -130,7 +130,7 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 VOICE = dict(bw=200, env=3, syl=0.4)	# at least this wide (CW is narrower), swinging, with syllable rhythm
 CW = dict(bw=200, env=8, syl=0.3,	# strong: narrower than this, keyed on and off (AM carriers swing 5-7 dB from their sidebands), with rhythm (PSK31 has little)
 	keyed_bw=150, off=0.2, off_db=4)	# weak: this narrow or less (key clicks widen it), down at the floor (under off_db over it) this share of the time
-CARRIER = dict(bw=50, off=0.1, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), almost never down at the floor (fading or AM sidebands don't matter), lasting
+CARRIER = dict(bw=50, off=0.15, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), almost never down at the floor (fading or AM sidebands don't matter), lasting
 COLORS = {"voice": "orange", "cw": "magenta", "carrier": "white", "short": "gray", "": "red"}	# PNG boxes; "" = unlabeled
 
 def channelize(x, lo_hz, dets, a):	# each detection as its own narrow I/Q (d["iq"], d["fs"]): one FFT of the block, a short inverse FFT each

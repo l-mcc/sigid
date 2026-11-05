@@ -30,7 +30,7 @@ Each detection is then cut out of the I/Q as its own narrow stream (one FFT of t
 Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
 - `voice`: `bw` >= 200 Hz, `swing` >= 3 dB, `rhythm` >= 0.4 (SSB phone, AM broadcasts)
 - `cw`: `bw` < 200 Hz, `swing` >= 8 dB, `rhythm` >= 0.3 (strong CW; AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm), or `bw` <= 150 Hz and `off` >= 20% (weak CW)
-- `carrier`: `bw` <= 50 Hz, `off` under 10%, at least 3 s (fading or AM sidebands don't matter; a lone FT8 reads ~70 Hz)
+- `carrier`: `bw` <= 50 Hz, `off` under 15%, at least 3 s (fading or AM sidebands don't matter; a lone FT8 reads ~70 Hz)
 - `short`: under 1 s, too short to measure
 
 The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.
