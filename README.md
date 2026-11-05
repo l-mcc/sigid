@@ -16,6 +16,7 @@ Early days: design notes first, code as it firms up.
 ./sigid.py 7.150 -a a -g 35 3      # runs rspdx -w 7.150 raw; waterfall at http://localhost:8700/
 ./sigid.py 7.150 -r x.cf32         # same, also recording the I/Q (about 4 MB/s)
 ./sigid.py 7.150 -i x.cf32         # replay a recording, no radio; PNGs named x_00000.png, x_00015.png...
+./sigid.py 7.150 -a a -q -m 10     # sit on the band 10 minutes, one line per block, then the summary
 ```
 Takes all of 40m at once (500 kS/s around the LO, 10 kHz above the dial). Every 15 s on the UTC clock it prints one line per signal found (center, bandwidth, start-end within the block, peak SNR) and writes `blocks/<UTC>.png`: the block's spectrogram with a red box per detection, to compare with the waterfall. rspdx commands typed in the terminal go to rspdx (`ant a`, `g 30 2`, `v 0`). Ctrl-C stops both.
 
@@ -35,7 +36,7 @@ Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
 
 The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.
 
-Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least half the blocks (`--recur`, and at least 3) are summarized with their typical bw, swing, rhythm, snr and time on per block, in a table: at the end of a replay, every 20 blocks live (`--summary`), and on Ctrl-C. That's the list of what sigid can't name yet.
+Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least 3 blocks (`--recur`) are summarized in a table with the USB dial to hear them on (1.5 kHz below), how many blocks they were in, and their typical bw, swing, rhythm, off, snr and time on per block. The summary comes at the end (`-m` minutes, the end of a replay, or Ctrl-C) and every 10 minutes live (`--summary`). Intermittent signals like packet only show up in longer runs. That's the list of what sigid can't name yet.
 
 Known limits: signals closer than ~300 Hz (FT8 stations, a CW pileup) merge into one detection.
 

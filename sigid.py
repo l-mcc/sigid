@@ -169,6 +169,8 @@ def classify(d):
 		return "carrier"
 	return ""
 
+BLOCK_S = 15	# set from --block in main
+
 class Recurring:	# unlabeled signals seen block after block at the same frequency: what sigid can't name yet
 	def __init__(s):
 		s.tracks, s.blocks = [], 0
@@ -187,16 +189,16 @@ class Recurring:	# unlabeled signals seen block after block at the same frequenc
 			t["rows"].append((d["f"], bw, d["env"], d["syl"], d["snr"], d["t1"] - d["t0"], d["off"]))
 			t["f"] = float(np.median([r[0] for r in t["rows"]]))
 
-	def report(s, frac):
-		keep = sorted((t for t in s.tracks if len(t["seen"]) >= max(3, frac * s.blocks)), key=lambda t: t["f"])
-		log.info(f"recurring unlabeled signals, in at least {frac:.0%} of {s.blocks} blocks: {len(keep)}")
+	def report(s, min_blocks):
+		keep = sorted((t for t in s.tracks if len(t["seen"]) >= min_blocks), key=lambda t: t["f"])
+		log.info(f"recurring unlabeled signals, in at least {min_blocks} of {s.blocks} blocks ({s.blocks * BLOCK_S / 60:.0f} min): {len(keep)}")
 		if not keep:
 			return
-		log.info(f"  {'freq':>10}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'off':>4}  {'snr':>7}  {'on/block':>8}")
+		log.info(f"  {'freq':>10}  {'usb dial':>9}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'off':>4}  {'snr':>7}  {'on/block':>8}")
 		for t in keep:
 			_, bw, env, syl, snr, dur, off = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
 			blocks = f"{len(t['seen'])}/{s.blocks}"
-			log.info(f"  {t['f'] / 1e6:10.6f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {off:4.0%}  {snr:4.0f} dB  {dur:6.1f} s")
+			log.info(f"  {t['f'] / 1e6:10.6f}  {(t['f'] - 1500) / 1e6:9.5f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {off:4.0%}  {snr:4.0f} dB  {dur:6.1f} s")
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -244,8 +246,10 @@ def main():
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
 	ap.add_argument("--chan-hz", type=float, default=200, help="narrowest I/Q cut out per detection, Hz")
 	ap.add_argument("--all", action="store_true", help="list labeled detections too (voice, cw, carrier, short), not just unlabeled ones")
-	ap.add_argument("--summary", type=int, default=20, help="blocks between recurring-signal summaries when live (also at the end)")
-	ap.add_argument("--recur", type=float, default=0.5, help="share of blocks a signal must appear in to count as recurring")
+	ap.add_argument("-m", "--minutes", type=float, default=0, help="stop after this many minutes and print the summary (0: until Ctrl-C or the end of a replay)")
+	ap.add_argument("--summary", type=int, default=40, help="blocks between recurring-signal summaries when live (40 = 10 min; also at the end)")
+	ap.add_argument("--recur", type=int, default=3, help="blocks an unlabeled signal must appear in to be summarized")
+	ap.add_argument("-q", "--quiet", action="store_true", help="one line per block, no listing")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
@@ -256,6 +260,8 @@ def main():
 	signal.signal(signal.SIGTERM, interrupt)
 	signal.signal(signal.SIGINT, interrupt)
 
+	global BLOCK_S
+	BLOCK_S = a.block
 	lo_hz = a.mhz * 1e6 + a.offset
 	live = not a.input
 	rx = None
@@ -293,21 +299,25 @@ def main():
 			counts = ", ".join(f"{sum(d['kind'] == k for d in dets)} {k or 'other'}" for k in COLORS)
 			stamp = datetime.datetime.fromtimestamp(tb, datetime.timezone.utc) if live else None
 			stamp_s = f"{stamp:%H:%M:%S}" if live else f"+{tb:.0f}s"
-			log.info(f"{stamp_s}  {len(dets)} signals: {counts}{'' if a.all else ' (listing other)'}  floor {floor:.1f} dB  bursts {noisy:.1f} s"
+			log.info(f"{stamp_s}  {len(dets)} signals: {counts}{'' if a.all or a.quiet else ' (listing other)'}  floor {floor:.1f} dB  bursts {noisy:.1f} s"
 				f"  ({time.perf_counter() - t:.1f} s to process)")
 			for d in dets:
-				if a.all or not d["kind"]:
+				if not a.quiet and (a.all or not d["kind"]):
 					log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB"
 						f"  span {d['span']:5.0f}  swing {d['env']:4.1f} dB  rhythm {d['syl']:4.2f}  off {d['off']:4.0%}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
 				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, short gray, other red)", a.block)
 			recur.add(dets)
+			if a.minutes and recur.blocks * a.block >= a.minutes * 60:
+				log.info(f"{a.minutes:g} min done")
+				break
 			if live and recur.blocks % a.summary == 0:
 				recur.report(a.recur)
 			start += n
 			tb += a.block
-		log.info("input ended")
+		else:
+			log.info("input ended")
 	except KeyboardInterrupt:
 		pass
 	finally:
