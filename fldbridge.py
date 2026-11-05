@@ -159,7 +159,7 @@ def main():
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state; rspdx starts at 50 5")
 	ap.add_argument("--vol", type=float, help="speaker volume 0-2; Digital out is taken before it")
 	ap.add_argument("-m", "--mute", action="store_true", help="speaker volume 0")
-	ap.add_argument("-v", "--verbose", action="store_true")
+	ap.add_argument("-v", "--verbose", action="count", default=0, help="-v every flrig call, -vv also raw XML-RPC")
 	a = ap.parse_args()
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
@@ -171,7 +171,7 @@ def main():
 	if a.gain: setup.append(f"g {a.gain[0]} {a.gain[1]}")
 	if a.mute or a.vol is not None: setup.append(f"v {0 if a.mute else a.vol}")
 	rx = Rx(a.mhz, a.mode, setup)
-	srv = Server(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose)
+	srv = Server(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose > 1)
 	srv.register_instance(Flrig(rx))
 	log.info(f"{a.mhz:.6f} MHz {a.mode}, flrig on 127.0.0.1:{a.port}, audio on sink '{a.sink}'")
 	try:

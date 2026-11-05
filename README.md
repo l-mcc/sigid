@@ -17,7 +17,7 @@ Lets fldigi listen through the RSPdx. It runs `rspdx -n`, pretends to be flrig o
 ```
 ./fldbridge.py 7.074 usb -a b -g 35 3 --vol 0.5
 ```
-`-a` antenna, `-g` IF reduction and LNA state, `--vol` speaker (`-m` mutes), `-v` logs every flrig call. Without them rspdx starts on antenna A, IF 50, LNA 5, volume 0.10. While it runs, rspdx commands typed in the terminal go straight through: `ant c`, `g 30 2`, `v 0.8`.
+`-a` antenna, `-g` IF reduction and LNA state, `--vol` speaker (`-m` mutes), `-v` logs every flrig call, `-vv` also the raw XML-RPC. Without them rspdx starts on antenna A, IF 50, LNA 5, volume 0.10. While it runs, rspdx commands typed in the terminal go straight through: `ant c`, `g 30 2`, `v 0.8`.
 
 fldigi, once, with fldigi closed: `./fldigi-setup.sh` (flrig at 127.0.0.1:12345, PulseAudio; keeps a `.bak`). By hand it's Rig Control > flrig (enable, 127.0.0.1, 12345) and Soundcard > Devices > PulseAudio.
 
