@@ -25,11 +25,12 @@ Each detection is then cut out of the I/Q as its own narrow stream (one FFT of t
 - `span`: the whole box in Hz (`bw` is the 99%-power width)
 - `swing`: how far its strength swings, dB between the quieter and louder quarters of the time: ~1-2 for steady signals (carriers, FSK, PSK), 3+ for speech, large for CW keying
 - `rhythm`: share of that swinging at syllable rate (1.5-8 Hz): ~0.2-0.3 without rhythm, 0.5+ for speech
+- `off`: share of the time the signal is down at the noise floor, followed frame by frame in its own bins of the spectrogram (unsmoothed): keyed CW 20%+, carriers, FSK and PSK near 0. Unlike `swing` it holds up for weak signals, whose gaps the channel's noise would fill
 
 Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
 - `voice`: `bw` >= 200 Hz, `swing` >= 3 dB, `rhythm` >= 0.4 (SSB phone, AM broadcasts)
-- `cw`: `bw` < 200 Hz, `swing` >= 8 dB, `rhythm` >= 0.3 (AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm)
-- `carrier`: `bw` <= 50 Hz, `swing` < 3 dB, at least 3 s (a lone FT8 reads ~70 Hz)
+- `cw`: `bw` < 200 Hz, `swing` >= 8 dB, `rhythm` >= 0.3 (strong CW; AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm), or `bw` <= 150 Hz and `off` >= 20% (weak CW)
+- `carrier`: `bw` <= 50 Hz, `off` under 10%, at least 3 s (fading or AM sidebands don't matter; a lone FT8 reads ~70 Hz)
 - `short`: under 1 s, too short to measure
 
 The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.

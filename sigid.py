@@ -92,8 +92,8 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 	X = scipy.fft.fftshift(scipy.fft.fft(x[:frames * nfft].reshape(frames, nfft) * w, axis=1, workers=-1), axes=1)
 	f = lo_hz + (np.arange(nfft) - nfft // 2) * a.rate / nfft
 	keep = (f >= a.band[0] * 1e6) & (f <= a.band[1] * 1e6)
-	f, p = f[keep], np.abs(X[:, keep]) ** 2
-	p = ndimage.uniform_filter(p, size=3)	# 3x3 average: lone noise cells rarely clear the threshold
+	f, raw = f[keep], np.abs(X[:, keep]) ** 2
+	p = ndimage.uniform_filter(raw, size=3)	# 3x3 average: lone noise cells rarely clear the threshold
 	db = 10 * np.log10(p + 1e-30)
 	floor_bins = max(3, int(a.floor_hz * nfft / a.rate))
 	floor = ndimage.percentile_filter(np.median(db, axis=0), 20, size=floor_bins)	# low percentile across freq: steady carriers don't raise it
@@ -101,6 +101,7 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 	burst = np.median(snr, axis=1)	# each frame's level across the band: static crashes and fence pulses raise every frequency at once
 	snr -= burst[:, None]	# so measure signals against their own moment, not the block's average
 	snr[:, np.abs(f - lo_hz) < a.dc_hz] = 0	# the RSPdx's own spike at the LO
+	raw = raw / 10 ** ((floor[None, :] + burst[:, None]) / 10)	# unsmoothed power over the floor (linear), for keying
 	frame_s, bin_hz = nfft / a.rate, a.rate / nfft
 	join = (round(a.gap / frame_s) | 1, round(a.join_hz / bin_hz) | 1)	# odd sizes keep the closing centered
 	mask = close(snr > a.thresh, join)	# one signal across short gaps: CW spaces, fading, syllables, voice harmonics
@@ -115,18 +116,21 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 		wgt = np.where(cells & (s > a.thresh), 10 ** (s / 10), 0).sum(axis=0)	# power per bin, signal cells only (not bridged gaps)
 		c = np.cumsum(wgt) / wgt.sum()
 		k0, k1 = np.searchsorted(c, 0.005), np.searchsorted(c, 0.995)	# 99% of the power lies between these bins
+		lev = 10 * np.log10(raw[ts, fs.start + k0:fs.start + k1 + 1].mean(axis=1) + 1e-30)	# its own bins (the 99% width), frame by frame, unsmoothed
 		dets.append(dict(
 			f=float(np.average(f[fs], weights=wgt)),
 			lo=float(f[fs][k0] - bin_hz / 2), hi=float(f[fs][min(k1, len(c) - 1)] + bin_hz / 2),	# 99% bandwidth
 			span=float(f[fs.stop - 1] - f[fs.start] + bin_hz),	# the whole box: includes a voice's weak upper harmonics
 			t0=ts.start * frame_s, t1=ts.stop * frame_s,
-			snr=float(s[cells].max())))
+			snr=float(s[cells].max()),
+			off=float((lev < CW["off_db"]).mean())))	# share of frames down at the floor: keyed CW 0.2+, carriers ~0
 	return f, snr, float(np.median(floor)), (burst > a.thresh / 2).sum() * frame_s, sorted(dets, key=lambda d: d["f"])
 
 # labels, checked in this order; bw = 99% bandwidth (Hz), env = strength swing (dB), syl = syllable-rate rhythm, dur = seconds
 VOICE = dict(bw=200, env=3, syl=0.4)	# at least this wide (CW is narrower), swinging, with syllable rhythm
-CW = dict(bw=200, env=8, syl=0.3)	# narrower than this, keyed on and off (AM carriers swing 5-7 dB from their sidebands), with rhythm (PSK31 has little)
-CARRIER = dict(bw=50, env=3, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), steady, lasting
+CW = dict(bw=200, env=8, syl=0.3,	# strong: narrower than this, keyed on and off (AM carriers swing 5-7 dB from their sidebands), with rhythm (PSK31 has little)
+	keyed_bw=150, off=0.2, off_db=4)	# weak: this narrow or less (key clicks widen it), down at the floor (under off_db over it) this share of the time
+CARRIER = dict(bw=50, off=0.1, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), almost never down at the floor (fading or AM sidebands don't matter), lasting
 COLORS = {"voice": "orange", "cw": "magenta", "carrier": "white", "short": "gray", "": "red"}	# PNG boxes; "" = unlabeled
 
 def channelize(x, lo_hz, dets, a):	# each detection as its own narrow I/Q (d["iq"], d["fs"]): one FFT of the block, a short inverse FFT each
@@ -159,9 +163,9 @@ def classify(d):
 		return "short"
 	if bw >= VOICE["bw"] and env >= VOICE["env"] and syl >= VOICE["syl"]:
 		return "voice"
-	if bw < CW["bw"] and env >= CW["env"] and syl >= CW["syl"]:
+	if (bw < CW["bw"] and env >= CW["env"] and syl >= CW["syl"]) or (bw <= CW["keyed_bw"] and d["off"] >= CW["off"]):
 		return "cw"
-	if bw <= CARRIER["bw"] and env < CARRIER["env"] and dur >= CARRIER["dur"]:
+	if bw <= CARRIER["bw"] and d["off"] < CARRIER["off"] and dur >= CARRIER["dur"]:
 		return "carrier"
 	return ""
 
@@ -180,7 +184,7 @@ class Recurring:	# unlabeled signals seen block after block at the same frequenc
 				t = dict(f=d["f"], seen=set(), rows=[])
 				s.tracks.append(t)
 			t["seen"].add(s.blocks)
-			t["rows"].append((d["f"], bw, d["env"], d["syl"], d["snr"], d["t1"] - d["t0"]))
+			t["rows"].append((d["f"], bw, d["env"], d["syl"], d["snr"], d["t1"] - d["t0"], d["off"]))
 			t["f"] = float(np.median([r[0] for r in t["rows"]]))
 
 	def report(s, frac):
@@ -188,11 +192,11 @@ class Recurring:	# unlabeled signals seen block after block at the same frequenc
 		log.info(f"recurring unlabeled signals, in at least {frac:.0%} of {s.blocks} blocks: {len(keep)}")
 		if not keep:
 			return
-		log.info(f"  {'freq':>10}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'snr':>7}  {'on/block':>8}")
+		log.info(f"  {'freq':>10}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'off':>4}  {'snr':>7}  {'on/block':>8}")
 		for t in keep:
-			_, bw, env, syl, snr, dur = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
+			_, bw, env, syl, snr, dur, off = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
 			blocks = f"{len(t['seen'])}/{s.blocks}"
-			log.info(f"  {t['f'] / 1e6:10.6f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {snr:4.0f} dB  {dur:6.1f} s")
+			log.info(f"  {t['f'] / 1e6:10.6f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {off:4.0%}  {snr:4.0f} dB  {dur:6.1f} s")
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -294,7 +298,7 @@ def main():
 			for d in dets:
 				if a.all or not d["kind"]:
 					log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB"
-						f"  span {d['span']:5.0f}  swing {d['env']:4.1f} dB  rhythm {d['syl']:4.2f}  {d['kind']}")
+						f"  span {d['span']:5.0f}  swing {d['env']:4.1f} dB  rhythm {d['syl']:4.2f}  off {d['off']:4.0%}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
 				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, short gray, other red)", a.block)
