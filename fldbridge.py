@@ -11,7 +11,8 @@ MODES = {"lsb": "LSB", "usb": "USB", "am": "AM", "wbfm": "WFM"}	# rspdx name: na
 class Rx:	# rspdx -n as a child: commands on stdin, JSON lines on stdout
 	def __init__(s, mhz, mode, setup):
 		s.mhz, s.mode, s.closing = mhz, mode, False
-		s.p = subprocess.Popen([RSPDX, "-n", f"{mhz:.6f}", mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+		s.p = subprocess.Popen([RSPDX, "-n", f"{mhz:.6f}", mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+			start_new_session=True)	# Ctrl-C reaches only the bridge, which closes rspdx itself
 		threading.Thread(target=s.read, daemon=True).start()
 		for c in ["digi 1", "bw 3"] + setup:
 			s.send(c)
@@ -103,7 +104,8 @@ class Sink:	# PulseAudio null sink fed from rspdx's Digital out (UDP, 48 kHz s16
 	def __init__(s, name, port):
 		s.mod = subprocess.check_output(["pactl", "load-module", "module-null-sink", f"sink_name={name}",
 			f"sink_properties=device.description={name}"], text=True).strip()
-		s.cat = subprocess.Popen(["pacat", "--playback", "--raw", "-d", name, "--format=s16le", "--rate=48000", "--channels=1"], stdin=subprocess.PIPE, bufsize=0)
+		s.cat = subprocess.Popen(["pacat", "--playback", "--raw", "-d", name, "--format=s16le", "--rate=48000", "--channels=1"], stdin=subprocess.PIPE, bufsize=0,
+			start_new_session=True)
 		s.sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		try:
 			s.sk.bind(("127.0.0.1", port))
@@ -143,6 +145,7 @@ def main():
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
 	signal.signal(signal.SIGTERM, interrupt)
+	signal.signal(signal.SIGINT, interrupt)	# even if started with SIGINT ignored
 	sink = Sink(a.sink, a.udp)
 	setup = []	# rspdx commands sent at startup
 	if a.ant: setup.append(f"ant {a.ant}")
