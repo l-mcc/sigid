@@ -9,12 +9,13 @@ RSPDX = shutil.which("rspdx") or sys.exit("rspdx not found on PATH; build and in
 MODES = {"lsb": "LSB", "usb": "USB", "am": "AM", "wbfm": "WFM"}	# rspdx name: name fldigi sees
 
 class Rx:	# rspdx -n as a child: commands on stdin, JSON lines on stdout
-	def __init__(s, mhz, mode, mute):
+	def __init__(s, mhz, mode, setup):
 		s.mhz, s.mode, s.closing = mhz, mode, False
 		s.p = subprocess.Popen([RSPDX, "-n", f"{mhz:.6f}", mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
 		threading.Thread(target=s.read, daemon=True).start()
-		for c in ["digi 1", "bw 3"] + (["v 0"] if mute else []):	# Digital out is taken before volume, so mute only silences the speaker
+		for c in ["digi 1", "bw 3"] + setup:
 			s.send(c)
+		threading.Thread(target=s.typed, daemon=True).start()
 
 	def send(s, line):
 		s.p.stdin.write(line + "\n")
@@ -29,10 +30,15 @@ class Rx:	# rspdx -n as a child: commands on stdin, JSON lines on stdout
 			if m.get("type") == "state":
 				s.mhz, s.mode = m["state"]["mhz"], m["state"]["mode"].lower()
 			elif m.get("type") == "notice":
-				log.debug(f"rspdx: {m['msg']}")
+				log.info(f"rspdx: {m['msg']}")
 		if not s.closing:
 			log.error(f"rspdx exited ({s.p.wait()})")
 			os.kill(os.getpid(), signal.SIGTERM)
+
+	def typed(s):	# lines typed in this terminal go straight to rspdx: ant b, g 35 3, v 0.5
+		for line in sys.stdin:
+			if line.strip():
+				s.send(line.strip())
 
 	def tune(s, hz):
 		s.mhz = hz / 1e6	# optimistic; the next state line confirms it
@@ -128,6 +134,9 @@ def main():
 	ap.add_argument("-p", "--port", type=int, default=12345, help="XML-RPC port fldigi connects to (flrig's default)")
 	ap.add_argument("-u", "--udp", type=int, default=7355, help="rspdx Digital out port")
 	ap.add_argument("-s", "--sink", default="sigid", help="null sink name; fldigi records its monitor")
+	ap.add_argument("-a", "--ant", choices="abc", help="antenna port")
+	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state; rspdx starts at 50 5")
+	ap.add_argument("--vol", type=float, help="speaker volume 0-2; Digital out is taken before it")
 	ap.add_argument("-m", "--mute", action="store_true", help="speaker volume 0")
 	ap.add_argument("-v", "--verbose", action="store_true")
 	a = ap.parse_args()
@@ -135,7 +144,11 @@ def main():
 
 	signal.signal(signal.SIGTERM, interrupt)
 	sink = Sink(a.sink, a.udp)
-	rx = Rx(a.mhz, a.mode, a.mute)
+	setup = []	# rspdx commands sent at startup
+	if a.ant: setup.append(f"ant {a.ant}")
+	if a.gain: setup.append(f"g {a.gain[0]} {a.gain[1]}")
+	if a.mute or a.vol is not None: setup.append(f"v {0 if a.mute else a.vol}")
+	rx = Rx(a.mhz, a.mode, setup)
 	srv = SimpleXMLRPCServer(("127.0.0.1", a.port), allow_none=False, logRequests=False)
 	srv.register_instance(Flrig(rx))
 	log.info(f"{a.mhz:.6f} MHz {a.mode}, flrig on 127.0.0.1:{a.port}, audio on sink '{a.sink}'")

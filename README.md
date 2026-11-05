@@ -15,8 +15,9 @@ Early days: design notes first, code as it firms up.
 Lets fldigi listen through the RSPdx. It runs `rspdx -n`, pretends to be flrig over XML-RPC so fldigi can read and set frequency and mode, and plays rspdx's Digital out (UDP 7355) into a PulseAudio null sink fldigi records from.
 
 ```
-./fldbridge.py 7.074 usb        # -m mutes the speaker, -v logs every call
+./fldbridge.py 7.074 usb -a b -g 35 3 --vol 0.5
 ```
+`-a` antenna, `-g` IF reduction and LNA state, `--vol` speaker (`-m` mutes), `-v` logs every flrig call. Without them rspdx starts on antenna A, IF 50, LNA 5, volume 0.10. While it runs, rspdx commands typed in the terminal go straight through: `ant c`, `g 30 2`, `v 0.8`.
 
 fldigi, once:
 - Configure > Rig Control > flrig: enable, address 127.0.0.1, port 12345
