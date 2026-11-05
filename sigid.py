@@ -77,6 +77,14 @@ class Rspdx:	# rspdx -w <mhz> raw as a child: I/Q on its stdout, commands on its
 			except subprocess.TimeoutExpired:
 				s.p.terminate()
 
+def close(m, size):	# binary closing by a rectangle as 1-D max/min filters (fast); outside counts as filled so block edges aren't eaten
+	m = m.astype(np.uint8)
+	for ax, n in enumerate(size):
+		m = ndimage.maximum_filter1d(m, n, axis=ax, mode="constant", cval=0)
+	for ax, n in enumerate(size):
+		m = ndimage.minimum_filter1d(m, n, axis=ax, mode="constant", cval=1)
+	return m.astype(bool)
+
 def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 	nfft = a.nfft
 	frames = len(x) // nfft
@@ -92,10 +100,10 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 	snr = db - floor
 	burst = np.median(snr, axis=1)	# each frame's level across the band: static crashes and fence pulses raise every frequency at once
 	snr -= burst[:, None]	# so measure signals against their own moment, not the block's average
+	snr[:, np.abs(f - lo_hz) < a.dc_hz] = 0	# the RSPdx's own spike at the LO
 	frame_s, bin_hz = nfft / a.rate, a.rate / nfft
-	join = (max(1, round(a.gap / frame_s)), max(1, round(a.join_hz / bin_hz)))
-	pad = np.pad(snr > a.thresh, [(j, j) for j in join])	# padded so closing doesn't eat the block's edges
-	mask = ndimage.binary_closing(pad, structure=np.ones(join))[join[0]:-join[0], join[1]:-join[1]]	# one signal across short gaps: CW spaces, fading, voice
+	join = (round(a.gap / frame_s) | 1, round(a.join_hz / bin_hz) | 1)	# odd sizes keep the closing centered
+	mask = close(snr > a.thresh, join)	# one signal across short gaps: CW spaces, fading, syllables, voice harmonics
 	lab, _ = ndimage.label(mask, structure=np.ones((3, 3)))
 	dets = []
 	for i, sl in enumerate(ndimage.find_objects(lab), 1):
@@ -104,10 +112,12 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 		if cells.sum() < a.min_cells or s[cells].max() < a.peak:	# small, or never clearly above the floor: noise
 			continue
 		ts, fs = sl
-		wgt = np.where(cells, 10 ** (s / 10), 0).sum(axis=0)	# power per bin within the blob
+		wgt = np.where(cells & (s > a.thresh), 10 ** (s / 10), 0).sum(axis=0)	# power per bin, signal cells only (not bridged gaps)
+		c = np.cumsum(wgt) / wgt.sum()
+		k0, k1 = np.searchsorted(c, 0.005), np.searchsorted(c, 0.995)	# 99% of the power lies between these bins
 		dets.append(dict(
 			f=float(np.average(f[fs], weights=wgt)),
-			lo=float(f[fs.start] - bin_hz / 2), hi=float(f[fs.stop - 1] + bin_hz / 2),
+			lo=float(f[fs][k0] - bin_hz / 2), hi=float(f[fs][min(k1, len(c) - 1)] + bin_hz / 2),
 			t0=ts.start * frame_s, t1=ts.stop * frame_s,
 			snr=float(s[cells].max())))
 	return f, snr, float(np.median(floor)), (burst > a.thresh / 2).sum() * frame_s, sorted(dets, key=lambda d: d["f"])
@@ -148,7 +158,8 @@ def main():
 	ap.add_argument("--peak", type=float, default=10, help="dB over the floor a detection must reach somewhere")
 	ap.add_argument("--floor-hz", type=float, default=5000, help="width the noise floor is taken over")
 	ap.add_argument("--gap", type=float, default=1.0, help="seconds of silence bridged within one signal")
-	ap.add_argument("--join-hz", type=float, default=30, help="Hz of gap bridged within one signal")
+	ap.add_argument("--join-hz", type=float, default=300, help="Hz of gap bridged within one signal (voice harmonics)")
+	ap.add_argument("--dc-hz", type=float, default=100, help="ignore this close to the LO (the RSPdx's center spike)")
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port")
