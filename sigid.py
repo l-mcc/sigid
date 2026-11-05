@@ -127,7 +127,7 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 VOICE = dict(bw=200, env=3, syl=0.4)	# at least this wide (CW is narrower), swinging, with syllable rhythm
 CW = dict(bw=200, env=8, syl=0.3)	# narrower than this, keyed on and off (AM carriers swing 5-7 dB from their sidebands), with rhythm (PSK31 has little)
 CARRIER = dict(bw=50, env=3, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), steady, lasting
-COLORS = {"voice": "orange", "cw": "magenta", "carrier": "white", "": "red"}	# PNG boxes; "" = unlabeled
+COLORS = {"voice": "orange", "cw": "magenta", "carrier": "white", "short": "gray", "": "red"}	# PNG boxes; "" = unlabeled
 
 def channelize(x, lo_hz, dets, a):	# each detection as its own narrow I/Q (d["iq"], d["fs"]): one FFT of the block, a short inverse FFT each
 	N = len(x)
@@ -153,8 +153,10 @@ def features(d):	# measurements of one detection's narrow I/Q
 	fm = np.fft.rfftfreq(n, 0.01)
 	d["syl"] = float(m[(fm >= 1.5) & (fm <= 8)].sum() / m[(fm >= 0.5) & (fm <= 25)].sum())	# share of the rhythm at syllable rate; ~0.27 if none
 
-def classify(d):	# nan (under 1 s) compares False, so short detections stay unlabeled
+def classify(d):
 	bw, env, syl, dur = d["hi"] - d["lo"], d["env"], d["syl"], d["t1"] - d["t0"]
+	if math.isnan(env):	# under 1 s: too short to measure
+		return "short"
 	if bw >= VOICE["bw"] and env >= VOICE["env"] and syl >= VOICE["syl"]:
 		return "voice"
 	if bw < CW["bw"] and env >= CW["env"] and syl >= CW["syl"]:
@@ -162,6 +164,32 @@ def classify(d):	# nan (under 1 s) compares False, so short detections stay unla
 	if bw <= CARRIER["bw"] and env < CARRIER["env"] and dur >= CARRIER["dur"]:
 		return "carrier"
 	return ""
+
+class Recurring:	# unlabeled signals seen block after block at the same frequency: what sigid can't name yet
+	def __init__(s):
+		s.tracks, s.blocks = [], 0
+
+	def add(s, dets):
+		s.blocks += 1
+		for d in dets:
+			if d["kind"]:
+				continue
+			bw = d["hi"] - d["lo"]
+			t = min(s.tracks, key=lambda t: abs(t["f"] - d["f"]), default=None)
+			if t is None or abs(t["f"] - d["f"]) > max(50, bw / 2):	# same signal if within 50 Hz or half its width
+				t = dict(f=d["f"], seen=set(), rows=[])
+				s.tracks.append(t)
+			t["seen"].add(s.blocks)
+			t["rows"].append((d["f"], bw, d["env"], d["syl"], d["snr"], d["t1"] - d["t0"]))
+			t["f"] = float(np.median([r[0] for r in t["rows"]]))
+
+	def report(s, frac):
+		keep = sorted((t for t in s.tracks if len(t["seen"]) >= max(3, frac * s.blocks)), key=lambda t: t["f"])
+		log.info(f"recurring unlabeled signals (in at least {frac:.0%} of {s.blocks} blocks): {len(keep)}")
+		for t in keep:
+			_, bw, env, syl, snr, dur = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
+			log.info(f"  {t['f'] / 1e6:10.6f}  {len(t['seen']):3d}/{s.blocks} blocks  bw {bw:6.0f} Hz  env {env:4.1f} dB  syl {syl:4.2f}"
+				f"  snr {snr:4.1f} dB  {dur:4.1f} s per block")
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -208,7 +236,9 @@ def main():
 	ap.add_argument("--dc-hz", type=float, default=100, help="ignore this close to the LO (the RSPdx's center spike)")
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
 	ap.add_argument("--chan-hz", type=float, default=200, help="narrowest I/Q cut out per detection, Hz")
-	ap.add_argument("--all", action="store_true", help="list labeled detections too (voice, cw, carrier), not just unlabeled ones")
+	ap.add_argument("--all", action="store_true", help="list labeled detections too (voice, cw, carrier, short), not just unlabeled ones")
+	ap.add_argument("--summary", type=int, default=20, help="blocks between recurring-signal summaries when live (also at the end)")
+	ap.add_argument("--recur", type=float, default=0.5, help="share of blocks a signal must appear in to count as recurring")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
@@ -233,6 +263,7 @@ def main():
 		src = open(a.input, "rb")
 	rec = open(a.record, "wb") if a.record and live else None
 	r = Reader(src, a.rate, live, rec)
+	recur = Recurring()
 	if a.png:
 		os.makedirs(a.png, exist_ok=True)
 	n = int(a.block * a.rate)
@@ -263,7 +294,10 @@ def main():
 						f"  span {d['span']:5.0f}  env {d['env']:4.1f} dB  syl {d['syl']:4.2f}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
-				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, other red)", a.block)
+				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, short gray, other red)", a.block)
+			recur.add(dets)
+			if live and recur.blocks % a.summary == 0:
+				recur.report(a.recur)
 			start += n
 			tb += a.block
 		log.info("input ended")
@@ -272,6 +306,8 @@ def main():
 	finally:
 		signal.signal(signal.SIGTERM, signal.SIG_IGN)
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
+		if recur.blocks:
+			recur.report(a.recur)
 		if rx:
 			rx.close()
 		if rec:

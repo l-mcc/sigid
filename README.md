@@ -30,8 +30,11 @@ Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
 - `voice`: `bw` >= 200 Hz, `env` >= 3 dB, `syl` >= 0.4 (SSB phone, AM broadcasts)
 - `cw`: `bw` < 200 Hz, `env` >= 8 dB, `syl` >= 0.3 (AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm)
 - `carrier`: `bw` <= 50 Hz, `env` < 3 dB, at least 3 s (a lone FT8 reads ~70 Hz)
+- `short`: under 1 s, too short to measure
 
-The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, unlabeled red. Thresholds come from synthetic signals and one 40m recording; detections under 1 s are too short to measure and stay unlabeled.
+The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.
+
+Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least half the blocks (`--recur`, and at least 3) are summarized with their typical bw, env, syl, snr and duration: at the end of a replay, every 20 blocks live (`--summary`), and on Ctrl-C. That's the list of what sigid can't name yet. Thresholds come from synthetic signals and one 40m recording; detections under 1 s are too short to measure and stay unlabeled.
 
 Known limits: signals closer than ~300 Hz (FT8 stations, a CW pileup) merge into one detection.
 
