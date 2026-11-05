@@ -48,14 +48,24 @@ class Reader:	# drains cf32 from rspdx or a file on its own thread so the RSPdx 
 			log.warning(f"falling behind: {backlog:.0f} s of I/Q waiting")
 		return x
 
-class Rspdx:	# rspdx -w <mhz> raw as a child: I/Q on its stdout, commands on its stdin
+class Rspdx:	# rspdx -w <mhz> raw as a child: I/Q on its stdout, commands on its stdin, messages on its stderr
+	CHATTER = ("Queue:", "RSP: Uninit", "Consumed samples", "Waterfall dropped", "Audio latency", "Wall time",
+		"Process CPU", "Main thread CPU", "DSP:")	# rspdx's running and exit statistics: shown with -v only
+
 	def __init__(s, mhz, setup):
 		exe = shutil.which("rspdx") or sys.exit("rspdx not found on PATH; build and install it from the radio repo")
 		s.p = subprocess.Popen([exe, "-w", f"{mhz:.6f}", "raw"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-			start_new_session=True)	# Ctrl-C reaches only sigid, which closes rspdx itself
+			stderr=subprocess.PIPE, start_new_session=True)	# Ctrl-C reaches only sigid, which closes rspdx itself
 		for c in setup:
 			s.send(c)
 		threading.Thread(target=s.typed, daemon=True).start()
+		threading.Thread(target=s.messages, daemon=True).start()
+
+	def messages(s):
+		for b in s.p.stderr:
+			line = b.decode(errors="replace").rstrip()
+			if line:
+				(log.debug if line.startswith(s.CHATTER) else log.info)(f"rspdx: {line}")
 
 	def send(s, line):
 		try:
@@ -254,7 +264,7 @@ def main():
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
 	ap.add_argument("--vol", type=float, help="rspdx speaker volume 0-2 (rspdx starts at 0.10)")
-	ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+	ap.add_argument("-v", "--verbose", action="store_true", help="debug logging, including rspdx's queue and exit statistics")
 	a = ap.parse_args()
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(message)s")
 	signal.signal(signal.SIGTERM, interrupt)
