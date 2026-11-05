@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # fldbridge: fldigi <-> rspdx. Pretends to be flrig (XML-RPC) and feeds rspdx's Digital out into a PulseAudio null sink.
 # fldigi: Rig Control > flrig, 127.0.0.1:12345; Audio > PulseAudio, capture = "Monitor of sigid".
-import argparse, json, logging, os, shutil, signal, socket, subprocess, sys, threading
+import argparse, json, logging, os, re, shutil, signal, socket, subprocess, sys, threading
 from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 
 log = logging.getLogger("fldbridge")
@@ -78,6 +78,9 @@ class Flrig:	# the slice of flrig's API fldigi uses; unknown methods are logged 
 		log.debug(f"{method}{tuple(params)} -> {r!r}")
 		return r
 
+	def system_listMethods(s):
+		return [n.replace("_", ".", 1) for n in dir(s) if n.startswith(("rig_", "main_", "system_"))]
+
 	def main_get_version(s): return "1.4.7"
 	def rig_get_xcvr(s): return "RSPdx"
 	def rig_get_info(s): return f"R:RSPdx\nT:R\nFA:{round(s.rx.mhz * 1e6)}\nM:{MODES[s.rx.mode]}\n"
@@ -109,6 +112,7 @@ class AnyPath(SimpleXMLRPCRequestHandler):
 
 class Server(SimpleXMLRPCServer):	# -v: raw request and reply bodies, to see what fldigi sends
 	def _marshaled_dispatch(s, data, dispatch_method=None, path=None):
+		data = re.sub(rb"<\?clientid[^>]*\?>", b"", data)	# fldigi's tag isn't valid XML; flrig ignores it
 		r = super()._marshaled_dispatch(data, dispatch_method, path)
 		if s.logRequests:
 			log.debug(f"request: {data.decode(errors='replace')!r}")
