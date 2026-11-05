@@ -10,6 +10,19 @@ Early days: design notes first, code as it firms up.
 - PulseAudio or PipeWire (`pactl`, `pacat`)
 - fldigi, for RSID labeling
 
+## sigid.py (milestone 1: detection)
+
+```
+./sigid.py 7.150 -a a -g 35 3      # runs rspdx -w 7.150 raw; waterfall at http://localhost:8700/
+./sigid.py 7.150 -r x.cf32         # same, also recording the I/Q (about 4 MB/s)
+./sigid.py 7.150 -i x.cf32         # replay a recording, no radio
+```
+Takes all of 40m at once (500 kS/s around the LO, 10 kHz above the dial). Every 15 s on the UTC clock it prints one line per signal found (center, bandwidth, start-end within the block, peak SNR) and writes `blocks/<UTC>.png`: the block's spectrogram with a red box per detection, to compare with the waterfall. rspdx commands typed in the terminal go to rspdx (`ant a`, `g 30 2`, `v 0`). Ctrl-C stops both.
+
+How it detects: 65536-point FFTs (7.6 Hz bins, 131 ms frames), a 3x3 average, a noise floor per frequency (median over the block, then a low percentile across 5 kHz so steady carriers don't raise it). Cells 6 dB over the floor are signal; gaps under 1 s or 30 Hz are bridged; a detection must reach 10 dB somewhere. All of these are options (`./sigid.py -h`). Known limits: FT8 stations closer than ~30 Hz merge into one detection, and bandwidths read about 40 Hz wide on narrow signals.
+
+Needs `pip install -r requirements.txt` (numpy, scipy, matplotlib).
+
 ## fldigi on the RSPdx
 
 ```
