@@ -123,7 +123,11 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 			snr=float(s[cells].max())))
 	return f, snr, float(np.median(floor)), (burst > a.thresh / 2).sum() * frame_s, sorted(dets, key=lambda d: d["f"])
 
-VOICE = dict(bw=200, env=3, syl=0.4)	# voice: 99% bandwidth at least this (Hz; CW is narrower), strength swinging this many dB, this much syllable rhythm
+# labels, checked in this order; bw = 99% bandwidth (Hz), env = strength swing (dB), syl = syllable-rate rhythm, dur = seconds
+VOICE = dict(bw=200, env=3, syl=0.4)	# at least this wide (CW is narrower), swinging, with syllable rhythm
+CW = dict(bw=200, env=8, syl=0.3)	# narrower than this, keyed on and off (AM carriers swing 5-7 dB from their sidebands), with rhythm (PSK31 has little)
+CARRIER = dict(bw=50, env=3, dur=3)	# this narrow or less (a lone FT8 reads ~70 Hz), steady, lasting
+COLORS = {"voice": "orange", "cw": "magenta", "carrier": "white", "": "red"}	# PNG boxes; "" = unlabeled
 
 def channelize(x, lo_hz, dets, a):	# each detection as its own narrow I/Q (d["iq"], d["fs"]): one FFT of the block, a short inverse FFT each
 	N = len(x)
@@ -149,9 +153,14 @@ def features(d):	# measurements of one detection's narrow I/Q
 	fm = np.fft.rfftfreq(n, 0.01)
 	d["syl"] = float(m[(fm >= 1.5) & (fm <= 8)].sum() / m[(fm >= 0.5) & (fm <= 25)].sum())	# share of the rhythm at syllable rate; ~0.27 if none
 
-def classify(d):
-	if d["hi"] - d["lo"] >= VOICE["bw"] and d["env"] >= VOICE["env"] and d["syl"] >= VOICE["syl"]:	# nan compares False
+def classify(d):	# nan (under 1 s) compares False, so short detections stay unlabeled
+	bw, env, syl, dur = d["hi"] - d["lo"], d["env"], d["syl"], d["t1"] - d["t0"]
+	if bw >= VOICE["bw"] and env >= VOICE["env"] and syl >= VOICE["syl"]:
 		return "voice"
+	if bw < CW["bw"] and env >= CW["env"] and syl >= CW["syl"]:
+		return "cw"
+	if bw <= CARRIER["bw"] and env < CARRIER["env"] and dur >= CARRIER["dur"]:
+		return "carrier"
 	return ""
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
@@ -166,7 +175,7 @@ def save_png(path, f, snr, dets, title, block_s, pool=8):
 		extent=[f[0] / 1e6, f[n - 1] / 1e6, block_s, 0])
 	for d in dets:
 		ax.add_patch(Rectangle((d["lo"] / 1e6, d["t0"]), (d["hi"] - d["lo"]) / 1e6, d["t1"] - d["t0"], fill=False,
-			ec="orange" if d["kind"] == "voice" else "red", lw=0.6))
+			ec=COLORS[d["kind"]], lw=0.6))
 	ax.set_xlabel("MHz")
 	ax.set_ylabel("s")
 	ax.set_title(title)
@@ -199,7 +208,7 @@ def main():
 	ap.add_argument("--dc-hz", type=float, default=100, help="ignore this close to the LO (the RSPdx's center spike)")
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
 	ap.add_argument("--chan-hz", type=float, default=200, help="narrowest I/Q cut out per detection, Hz")
-	ap.add_argument("--voice", action="store_true", help="list voice detections too")
+	ap.add_argument("--all", action="store_true", help="list labeled detections too (voice, cw, carrier), not just unlabeled ones")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
@@ -243,18 +252,18 @@ def main():
 			for d in dets:
 				features(d)
 				d["kind"] = classify(d)
-			voice = sum(d["kind"] == "voice" for d in dets)
+			counts = ", ".join(f"{sum(d['kind'] == k for d in dets)} {k or 'other'}" for k in COLORS)
 			stamp = datetime.datetime.fromtimestamp(tb, datetime.timezone.utc) if live else None
 			stamp_s = f"{stamp:%H:%M:%S}" if live else f"+{tb:.0f}s"
-			log.info(f"{stamp_s}  {len(dets)} signals ({voice} voice{'' if a.voice else ', not listed'})  floor {floor:.1f} dB  bursts {noisy:.1f} s"
+			log.info(f"{stamp_s}  {len(dets)} signals: {counts}{'' if a.all else ' (listing other)'}  floor {floor:.1f} dB  bursts {noisy:.1f} s"
 				f"  ({time.perf_counter() - t:.1f} s to process)")
 			for d in dets:
-				if d["kind"] != "voice" or a.voice:
+				if a.all or not d["kind"]:
 					log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB"
 						f"  span {d['span']:5.0f}  env {d['env']:4.1f} dB  syl {d['syl']:4.2f}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
-				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals ({voice} voice, orange)", a.block)
+				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, other red)", a.block)
 			start += n
 			tb += a.block
 		log.info("input ended")

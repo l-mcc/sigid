@@ -10,12 +10,12 @@ Early days: design notes first, code as it firms up.
 - PulseAudio or PipeWire (`pactl`, `pacat`)
 - fldigi, for RSID labeling
 
-## sigid.py (milestone 1: detection; 2: voice)
+## sigid.py (milestone 1: detection; 2: labels)
 
 ```
 ./sigid.py 7.150 -a a -g 35 3      # runs rspdx -w 7.150 raw; waterfall at http://localhost:8700/
 ./sigid.py 7.150 -r x.cf32         # same, also recording the I/Q (about 4 MB/s)
-./sigid.py 7.150 -i x.cf32         # replay a recording, no radio
+./sigid.py 7.150 -i x.cf32         # replay a recording, no radio; PNGs named x_00000.png, x_00015.png...
 ```
 Takes all of 40m at once (500 kS/s around the LO, 10 kHz above the dial). Every 15 s on the UTC clock it prints one line per signal found (center, bandwidth, start-end within the block, peak SNR) and writes `blocks/<UTC>.png`: the block's spectrogram with a red box per detection, to compare with the waterfall. rspdx commands typed in the terminal go to rspdx (`ant a`, `g 30 2`, `v 0`). Ctrl-C stops both.
 
@@ -26,7 +26,12 @@ Each detection is then cut out of the I/Q as its own narrow stream (one FFT of t
 - `env`: how far its strength swings, dB between the quieter and louder quarters of the time: ~1-2 for steady signals (carriers, FSK, PSK), 3+ for speech, large for CW keying
 - `syl`: share of that swinging at syllable rate (1.5-8 Hz): ~0.2-0.3 without rhythm, 0.5+ for speech
 
-Voice is `bw` >= 200 Hz, `env` >= 3 dB and `syl` >= 0.4 (`VOICE` in sigid.py). Voice is counted on the block line but not listed (`--voice` lists it), and its boxes are orange in the PNG. Thresholds come from synthetic speech so far; real recordings will move them.
+Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
+- `voice`: `bw` >= 200 Hz, `env` >= 3 dB, `syl` >= 0.4 (SSB phone, AM broadcasts)
+- `cw`: `bw` < 200 Hz, `env` >= 8 dB, `syl` >= 0.3 (AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm)
+- `carrier`: `bw` <= 50 Hz, `env` < 3 dB, at least 3 s (a lone FT8 reads ~70 Hz)
+
+The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, unlabeled red. Thresholds come from synthetic signals and one 40m recording; detections under 1 s are too short to measure and stay unlabeled.
 
 Known limits: signals closer than ~300 Hz (FT8 stations, a CW pileup) merge into one detection.
 
