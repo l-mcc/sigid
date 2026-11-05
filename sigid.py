@@ -199,16 +199,26 @@ class Recurring:	# unlabeled signals seen block after block at the same frequenc
 			t["rows"].append((d["f"], bw, d["env"], d["syl"], d["snr"], d["t1"] - d["t0"], d["off"]))
 			t["f"] = float(np.median([r[0] for r in t["rows"]]))
 
-	def report(s, min_blocks):
-		keep = sorted((t for t in s.tracks if len(t["seen"]) >= min_blocks), key=lambda t: t["f"])
-		log.info(f"recurring unlabeled signals, in at least {min_blocks} of {s.blocks} blocks ({s.blocks * BLOCK_S / 60:.0f} min): {len(keep)}")
-		if not keep:
+	def report(s, min_blocks, top):
+		rows = []
+		for t in s.tracks:
+			if len(t["seen"]) < min_blocks:
+				continue
+			_, bw, env, syl, snr, dur, off = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
+			if off >= 0.4 and dur < 3:	# mostly off and briefly on: fragments of unlabeled voices
+				continue
+			rows.append((len(t["seen"]), t["f"], bw, env, syl, snr, dur, off))
+		rows.sort(key=lambda r: (-r[0], r[1]))	# most often seen first
+		log.info(f"recurring unlabeled signals, in at least {min_blocks} of {s.blocks} blocks ({s.blocks * BLOCK_S / 60:.0f} min): {len(rows)}"
+			+ (f", the {top} seen most" if len(rows) > top else ""))
+		if not rows:
 			return
 		log.info(f"  {'freq':>10}  {'usb dial':>9}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'off':>4}  {'snr':>7}  {'on/block':>8}")
-		for t in keep:
-			_, bw, env, syl, snr, dur, off = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
-			blocks = f"{len(t['seen'])}/{s.blocks}"
-			log.info(f"  {t['f'] / 1e6:10.6f}  {(t['f'] - 1500) / 1e6:9.5f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {off:4.0%}  {snr:4.0f} dB  {dur:6.1f} s")
+		for n, f, bw, env, syl, snr, dur, off in rows[:top]:
+			blocks = f"{n}/{s.blocks}"
+			log.info(f"  {f / 1e6:10.6f}  {(f - 1500) / 1e6:9.5f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {off:4.0%}  {snr:4.0f} dB  {dur:6.1f} s")
+		if len(rows) > top:
+			log.info(f"  +{len(rows) - top} more (--top)")
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -259,6 +269,7 @@ def main():
 	ap.add_argument("-m", "--minutes", type=float, default=0, help="stop after this many minutes and print the summary (0: until Ctrl-C or the end of a replay)")
 	ap.add_argument("--summary", type=int, default=40, help="blocks between recurring-signal summaries when live (40 = 10 min; also at the end)")
 	ap.add_argument("--recur", type=int, default=3, help="blocks an unlabeled signal must appear in to be summarized")
+	ap.add_argument("--top", type=int, default=10, help="rows in the summary, most often seen first")
 	ap.add_argument("-q", "--quiet", action="store_true", help="one line per block, no listing")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
@@ -323,7 +334,7 @@ def main():
 				log.info(f"{a.minutes:g} min done")
 				break
 			if live and recur.blocks % a.summary == 0:
-				recur.report(a.recur)
+				recur.report(a.recur, a.top)
 			start += n
 			tb += a.block
 		else:
@@ -334,7 +345,7 @@ def main():
 		signal.signal(signal.SIGTERM, signal.SIG_IGN)
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
 		if recur.blocks:
-			recur.report(a.recur)
+			recur.report(a.recur, a.top)
 		if rx:
 			rx.close()
 		if rec:

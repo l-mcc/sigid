@@ -36,7 +36,7 @@ Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
 
 The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.
 
-Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least 3 blocks (`--recur`) are summarized in a table with the USB dial to hear them on (1.5 kHz below), how many blocks they were in, and their typical bw, swing, rhythm, off, snr and time on per block. The summary comes at the end (`-m` minutes, the end of a replay, or Ctrl-C) and every 10 minutes live (`--summary`). Intermittent signals like packet only show up in longer runs. That's the list of what sigid can't name yet.
+Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least 3 blocks (`--recur`) are summarized in a table with the USB dial to hear them on (1.5 kHz below), how many blocks they were in, and their typical bw, swing, rhythm, off, snr and time on per block. Rows that are mostly off and on under 3 s per block (fragments of unlabeled voices) are left out; the rest are sorted by how often they were seen, and the top 10 shown (`--top`). The summary comes at the end (`-m` minutes, the end of a replay, or Ctrl-C) and every 10 minutes live (`--summary`). Steady signals show in a few minutes; bursty ones (VARA, packet) need longer runs to be counted. That's the list of what sigid can't name yet.
 
 Known limits: signals closer than ~300 Hz (FT8 stations, a CW pileup) merge into one detection.
 
