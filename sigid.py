@@ -90,6 +90,8 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 	floor_bins = max(3, int(a.floor_hz * nfft / a.rate))
 	floor = ndimage.percentile_filter(np.median(db, axis=0), 20, size=floor_bins)	# low percentile across freq: steady carriers don't raise it
 	snr = db - floor
+	burst = np.median(snr, axis=1)	# each frame's level across the band: static crashes and fence pulses raise every frequency at once
+	snr -= burst[:, None]	# so measure signals against their own moment, not the block's average
 	frame_s, bin_hz = nfft / a.rate, a.rate / nfft
 	join = (max(1, round(a.gap / frame_s)), max(1, round(a.join_hz / bin_hz)))
 	pad = np.pad(snr > a.thresh, [(j, j) for j in join])	# padded so closing doesn't eat the block's edges
@@ -108,7 +110,7 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 			lo=float(f[fs.start] - bin_hz / 2), hi=float(f[fs.stop - 1] + bin_hz / 2),
 			t0=ts.start * frame_s, t1=ts.stop * frame_s,
 			snr=float(s[cells].max())))
-	return f, snr, float(np.median(floor)), sorted(dets, key=lambda d: d["f"])
+	return f, snr, float(np.median(floor)), (burst > a.thresh / 2).sum() * frame_s, sorted(dets, key=lambda d: d["f"])
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -186,10 +188,10 @@ def main():
 			+ (f", first at {datetime.datetime.fromtimestamp(tb, datetime.timezone.utc):%H:%M:%S} UTC" if live else ""))
 		while (x := r.take(start, n)) is not None:
 			t = time.perf_counter()
-			f, snr, floor, dets = detect(x, lo_hz, a)
+			f, snr, floor, noisy, dets = detect(x, lo_hz, a)
 			stamp = datetime.datetime.fromtimestamp(tb, datetime.timezone.utc) if live else None
 			label = f"{stamp:%H:%M:%S}" if live else f"+{tb:.0f}s"
-			log.info(f"{label}  {len(dets)} signals  floor {floor:.1f} dB  {time.perf_counter() - t:.1f} s")
+			log.info(f"{label}  {len(dets)} signals  floor {floor:.1f} dB  bursts {noisy:.1f} s  ({time.perf_counter() - t:.1f} s to process)")
 			for d in dets:
 				log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB")
 			if a.png:
