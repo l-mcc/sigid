@@ -185,11 +185,14 @@ class Recurring:	# unlabeled signals seen block after block at the same frequenc
 
 	def report(s, frac):
 		keep = sorted((t for t in s.tracks if len(t["seen"]) >= max(3, frac * s.blocks)), key=lambda t: t["f"])
-		log.info(f"recurring unlabeled signals (in at least {frac:.0%} of {s.blocks} blocks): {len(keep)}")
+		log.info(f"recurring unlabeled signals, in at least {frac:.0%} of {s.blocks} blocks: {len(keep)}")
+		if not keep:
+			return
+		log.info(f"  {'freq':>10}  {'blocks':>7}  {'bw':>7}  {'swing':>7}  {'rhythm':>6}  {'snr':>7}  {'on/block':>8}")
 		for t in keep:
 			_, bw, env, syl, snr, dur = np.median(np.array(t["rows"]), axis=0)	# typical values over its appearances
-			log.info(f"  {t['f'] / 1e6:10.6f}  {len(t['seen']):3d}/{s.blocks} blocks  bw {bw:6.0f} Hz  env {env:4.1f} dB  syl {syl:4.2f}"
-				f"  snr {snr:4.1f} dB  {dur:4.1f} s per block")
+			blocks = f"{len(t['seen'])}/{s.blocks}"
+			log.info(f"  {t['f'] / 1e6:10.6f}  {blocks:>7}  {bw:4.0f} Hz  {env:4.1f} dB  {syl:6.2f}  {snr:4.0f} dB  {dur:6.1f} s")
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -291,7 +294,7 @@ def main():
 			for d in dets:
 				if a.all or not d["kind"]:
 					log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB"
-						f"  span {d['span']:5.0f}  env {d['env']:4.1f} dB  syl {d['syl']:4.2f}  {d['kind']}")
+						f"  span {d['span']:5.0f}  swing {d['env']:4.1f} dB  rhythm {d['syl']:4.2f}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
 				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals: {counts}   (voice orange, cw magenta, carrier white, short gray, other red)", a.block)

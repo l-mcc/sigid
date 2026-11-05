@@ -23,18 +23,18 @@ How it detects: 65536-point FFTs (7.6 Hz bins, 131 ms frames), a 3x3 average, a 
 
 Each detection is then cut out of the I/Q as its own narrow stream (one FFT of the block, a short inverse FFT per detection) and measured every 10 ms:
 - `span`: the whole box in Hz (`bw` is the 99%-power width)
-- `env`: how far its strength swings, dB between the quieter and louder quarters of the time: ~1-2 for steady signals (carriers, FSK, PSK), 3+ for speech, large for CW keying
-- `syl`: share of that swinging at syllable rate (1.5-8 Hz): ~0.2-0.3 without rhythm, 0.5+ for speech
+- `swing`: how far its strength swings, dB between the quieter and louder quarters of the time: ~1-2 for steady signals (carriers, FSK, PSK), 3+ for speech, large for CW keying
+- `rhythm`: share of that swinging at syllable rate (1.5-8 Hz): ~0.2-0.3 without rhythm, 0.5+ for speech
 
 Labels, checked in this order (`VOICE`, `CW`, `CARRIER` in sigid.py):
-- `voice`: `bw` >= 200 Hz, `env` >= 3 dB, `syl` >= 0.4 (SSB phone, AM broadcasts)
-- `cw`: `bw` < 200 Hz, `env` >= 8 dB, `syl` >= 0.3 (AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm)
-- `carrier`: `bw` <= 50 Hz, `env` < 3 dB, at least 3 s (a lone FT8 reads ~70 Hz)
+- `voice`: `bw` >= 200 Hz, `swing` >= 3 dB, `rhythm` >= 0.4 (SSB phone, AM broadcasts)
+- `cw`: `bw` < 200 Hz, `swing` >= 8 dB, `rhythm` >= 0.3 (AM carriers swing 5-7 dB from their sidebands; PSK31 has little rhythm)
+- `carrier`: `bw` <= 50 Hz, `swing` < 3 dB, at least 3 s (a lone FT8 reads ~70 Hz)
 - `short`: under 1 s, too short to measure
 
 The block line counts each kind; only unlabeled detections are listed (`--all` lists everything). PNG boxes: voice orange, cw magenta, carrier white, short gray, unlabeled red.
 
-Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least half the blocks (`--recur`, and at least 3) are summarized with their typical bw, env, syl, snr and duration: at the end of a replay, every 20 blocks live (`--summary`), and on Ctrl-C. That's the list of what sigid can't name yet. Thresholds come from synthetic signals and one 40m recording; detections under 1 s are too short to measure and stay unlabeled.
+Recurring signals: unlabeled detections at the same frequency (within 50 Hz or half their width) are tracked across blocks. Those seen in at least half the blocks (`--recur`, and at least 3) are summarized with their typical bw, swing, rhythm, snr and time on per block, in a table: at the end of a replay, every 20 blocks live (`--summary`), and on Ctrl-C. That's the list of what sigid can't name yet.
 
 Known limits: signals closer than ~300 Hz (FT8 stations, a CW pileup) merge into one detection.
 
