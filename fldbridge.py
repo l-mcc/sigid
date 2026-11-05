@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # fldbridge: fldigi <-> rspdx. Pretends to be flrig (XML-RPC) and feeds rspdx's Digital out into a PulseAudio null sink.
-# fldigi: Rig Control > flrig, 127.0.0.1:12345; Audio > PulseAudio, capture = "Monitor of sigid".
+# fldigi: ./fldigi-setup.sh once, then start it with PULSE_SOURCE=sigid.monitor (start.sh does both).
 import argparse, json, logging, os, re, shutil, signal, socket, subprocess, sys, threading
 from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 
@@ -75,7 +75,10 @@ class Flrig:	# the slice of flrig's API fldigi uses; unknown methods are logged 
 		except Exception:
 			log.exception(f"{method}{tuple(params)}")
 			raise
-		log.debug(f"{method}{tuple(params)} -> {r!r}")
+		if ".set_" in method:	# fldigi only sets when you change something; it polls the getters constantly
+			log.info(f"fldigi: {method}{tuple(params)}")
+		else:
+			log.debug(f"{method}{tuple(params)} -> {r!r}")
 		return r
 
 	def system_listMethods(s):
@@ -159,7 +162,7 @@ def main():
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state; rspdx starts at 50 5")
 	ap.add_argument("--vol", type=float, help="speaker volume 0-2; Digital out is taken before it")
 	ap.add_argument("-m", "--mute", action="store_true", help="speaker volume 0")
-	ap.add_argument("-v", "--verbose", action="count", default=0, help="-v every flrig call, -vv also raw XML-RPC")
+	ap.add_argument("-v", "--verbose", action="count", default=0, help="-v also fldigi's polling, -vv also raw XML-RPC")
 	a = ap.parse_args()
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
