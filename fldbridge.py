@@ -107,6 +107,14 @@ class Flrig:	# the slice of flrig's API fldigi uses; unknown methods are logged 
 class AnyPath(SimpleXMLRPCRequestHandler):
 	rpc_paths = ()	# accept POSTs to any path, not just / and /RPC2
 
+class Server(SimpleXMLRPCServer):	# -v: raw request and reply bodies, to see what fldigi sends
+	def _marshaled_dispatch(s, data, dispatch_method=None, path=None):
+		r = super()._marshaled_dispatch(data, dispatch_method, path)
+		if s.logRequests:
+			log.debug(f"request: {data.decode(errors='replace')!r}")
+			log.debug(f"reply: {r.decode(errors='replace')!r}")
+		return r
+
 class Sink:	# PulseAudio null sink fed from rspdx's Digital out (UDP, 48 kHz s16le mono)
 	def __init__(s, name, port):
 		s.mod = subprocess.check_output(["pactl", "load-module", "module-null-sink", f"sink_name={name}",
@@ -159,7 +167,7 @@ def main():
 	if a.gain: setup.append(f"g {a.gain[0]} {a.gain[1]}")
 	if a.mute or a.vol is not None: setup.append(f"v {0 if a.mute else a.vol}")
 	rx = Rx(a.mhz, a.mode, setup)
-	srv = SimpleXMLRPCServer(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose)
+	srv = Server(("127.0.0.1", a.port), AnyPath, allow_none=False, logRequests=a.verbose)
 	srv.register_instance(Flrig(rx))
 	log.info(f"{a.mhz:.6f} MHz {a.mode}, flrig on 127.0.0.1:{a.port}, audio on sink '{a.sink}'")
 	try:
