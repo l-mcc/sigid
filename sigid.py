@@ -117,10 +117,42 @@ def detect(x, lo_hz, a):	# -> freqs (Hz), SNR (dB, frames x bins) and detections
 		k0, k1 = np.searchsorted(c, 0.005), np.searchsorted(c, 0.995)	# 99% of the power lies between these bins
 		dets.append(dict(
 			f=float(np.average(f[fs], weights=wgt)),
-			lo=float(f[fs][k0] - bin_hz / 2), hi=float(f[fs][min(k1, len(c) - 1)] + bin_hz / 2),
+			lo=float(f[fs][k0] - bin_hz / 2), hi=float(f[fs][min(k1, len(c) - 1)] + bin_hz / 2),	# 99% bandwidth
+			span=float(f[fs.stop - 1] - f[fs.start] + bin_hz),	# the whole box: includes a voice's weak upper harmonics
 			t0=ts.start * frame_s, t1=ts.stop * frame_s,
 			snr=float(s[cells].max())))
 	return f, snr, float(np.median(floor)), (burst > a.thresh / 2).sum() * frame_s, sorted(dets, key=lambda d: d["f"])
+
+VOICE = dict(bw=200, env=3, syl=0.4)	# voice: 99% bandwidth at least this (Hz; CW is narrower), strength swinging this many dB, this much syllable rhythm
+
+def channelize(x, lo_hz, dets, a):	# each detection as its own narrow I/Q (d["iq"], d["fs"]): one FFT of the block, a short inverse FFT each
+	N = len(x)
+	X = scipy.fft.fft(x, workers=-1)
+	for d in dets:
+		m = int(max(a.chan_hz, 1.2 * d["span"]) * N / a.rate) // 2 * 2	# bins kept: the box plus a little; wider only adds noise
+		k = round((d["f"] - lo_hz) * N / a.rate)	# the detection's center bin
+		y = scipy.fft.ifft(scipy.fft.ifftshift(X[(k + np.arange(-m // 2, m // 2)) % N])) * (m / N)	# brickwall filter + decimate in one step
+		fs = m * a.rate / N
+		d["fs"], d["iq"] = fs, y[int(d["t0"] * fs):int(d["t1"] * fs)]
+
+def features(d):	# measurements of one detection's narrow I/Q
+	y, fs = d["iq"], d["fs"]
+	w = max(1, int(fs * 0.01))	# 10 ms steps
+	n = len(y) // w
+	if n < 100:	# under 1 s: too short to judge rhythm
+		d["env"] = d["syl"] = float("nan")
+		return
+	db = 10 * np.log10((np.abs(y[:n * w]) ** 2).reshape(n, w).mean(axis=1) + 1e-30)	# power every 10 ms
+	q1, q3 = np.percentile(db, [25, 75])
+	d["env"] = float(q3 - q1)	# dB the middle half of the time spans: ~1-2 steady (carrier, FSK, PSK), 3+ speech; short bursts barely move it
+	m = np.abs(np.fft.rfft(db - db.mean())) ** 2
+	fm = np.fft.rfftfreq(n, 0.01)
+	d["syl"] = float(m[(fm >= 1.5) & (fm <= 8)].sum() / m[(fm >= 0.5) & (fm <= 25)].sum())	# share of the rhythm at syllable rate; ~0.27 if none
+
+def classify(d):
+	if d["hi"] - d["lo"] >= VOICE["bw"] and d["env"] >= VOICE["env"] and d["syl"] >= VOICE["syl"]:	# nan compares False
+		return "voice"
+	return ""
 
 def save_png(path, f, snr, dets, title, block_s, pool=8):
 	import matplotlib
@@ -133,7 +165,8 @@ def save_png(path, f, snr, dets, title, block_s, pool=8):
 	ax.imshow(np.clip(img, 0, 30), aspect="auto", cmap="viridis", interpolation="nearest",
 		extent=[f[0] / 1e6, f[n - 1] / 1e6, block_s, 0])
 	for d in dets:
-		ax.add_patch(Rectangle((d["lo"] / 1e6, d["t0"]), (d["hi"] - d["lo"]) / 1e6, d["t1"] - d["t0"], fill=False, ec="red", lw=0.6))
+		ax.add_patch(Rectangle((d["lo"] / 1e6, d["t0"]), (d["hi"] - d["lo"]) / 1e6, d["t1"] - d["t0"], fill=False,
+			ec="orange" if d["kind"] == "voice" else "red", lw=0.6))
 	ax.set_xlabel("MHz")
 	ax.set_ylabel("s")
 	ax.set_title(title)
@@ -165,6 +198,8 @@ def main():
 	ap.add_argument("--join-hz", type=float, default=300, help="Hz of gap bridged within one signal (voice harmonics)")
 	ap.add_argument("--dc-hz", type=float, default=100, help="ignore this close to the LO (the RSPdx's center spike)")
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
+	ap.add_argument("--chan-hz", type=float, default=200, help="narrowest I/Q cut out per detection, Hz")
+	ap.add_argument("--voice", action="store_true", help="list voice detections too")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
 	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
 	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
@@ -204,14 +239,22 @@ def main():
 		while (x := r.take(start, n)) is not None:
 			t = time.perf_counter()
 			f, snr, floor, noisy, dets = detect(x, lo_hz, a)
-			stamp = datetime.datetime.fromtimestamp(tb, datetime.timezone.utc) if live else None
-			label = f"{stamp:%H:%M:%S}" if live else f"+{tb:.0f}s"
-			log.info(f"{label}  {len(dets)} signals  floor {floor:.1f} dB  bursts {noisy:.1f} s  ({time.perf_counter() - t:.1f} s to process)")
+			channelize(x, lo_hz, dets, a)
 			for d in dets:
-				log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB")
+				features(d)
+				d["kind"] = classify(d)
+			voice = sum(d["kind"] == "voice" for d in dets)
+			stamp = datetime.datetime.fromtimestamp(tb, datetime.timezone.utc) if live else None
+			stamp_s = f"{stamp:%H:%M:%S}" if live else f"+{tb:.0f}s"
+			log.info(f"{stamp_s}  {len(dets)} signals ({voice} voice{'' if a.voice else ', not listed'})  floor {floor:.1f} dB  bursts {noisy:.1f} s"
+				f"  ({time.perf_counter() - t:.1f} s to process)")
+			for d in dets:
+				if d["kind"] != "voice" or a.voice:
+					log.info(f"  {d['f'] / 1e6:10.6f}  bw {d['hi'] - d['lo']:7.0f} Hz  {d['t0']:5.1f}-{d['t1']:4.1f} s  snr {d['snr']:5.1f} dB"
+						f"  span {d['span']:5.0f}  env {d['env']:4.1f} dB  syl {d['syl']:4.2f}  {d['kind']}")
 			if a.png:
 				name = f"{stamp:%Y%m%d_%H%M%S}" if live else f"{os.path.splitext(os.path.basename(a.input))[0]}_{tb:05.0f}"
-				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{label}  {len(dets)} signals", a.block)
+				save_png(os.path.join(a.png, name + ".png"), f, snr, dets, f"{stamp_s}  {len(dets)} signals ({voice} voice, orange)", a.block)
 			start += n
 			tb += a.block
 		log.info("input ended")
