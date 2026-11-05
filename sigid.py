@@ -141,17 +141,21 @@ def save_png(path, f, snr, dets, title, block_s, pool=8):
 	fig.savefig(path)
 	plt.close(fig)
 
+class Help(argparse.ArgumentDefaultsHelpFormatter):	# -h shows defaults, except for options that are off unless given
+	def _get_help_string(s, action):
+		return action.help if action.default in (None, False) else super()._get_help_string(action)
+
 def interrupt(*_):	# SIGTERM takes the Ctrl-C path
 	raise KeyboardInterrupt
 
 def main():
-	ap = argparse.ArgumentParser(description="sigid milestone 1: detect signals in a band of RSPdx I/Q")
-	ap.add_argument("mhz", nargs="?", type=float, default=7.150, help="dial MHz given to rspdx (default 7.150)")
+	ap = argparse.ArgumentParser(description="sigid milestone 1: detect signals in a band of RSPdx I/Q", formatter_class=Help)
+	ap.add_argument("mhz", nargs="?", type=float, default=7.150, help="dial MHz given to rspdx; the LO is --offset above it")
 	ap.add_argument("-i", "--input", help="replay a .cf32 file instead of running rspdx")
 	ap.add_argument("-r", "--record", help="also save the live I/Q to this .cf32 file")
-	ap.add_argument("--band", nargs=2, type=float, default=[7.0, 7.3], metavar=("LO", "HI"), help="MHz to search (default 40m)")
-	ap.add_argument("--rate", type=float, default=500e3, help="rspdx raw sample rate (SSB modes: 500 kS/s)")
-	ap.add_argument("--offset", type=float, default=10e3, help="rspdx LO above the dial, Hz")
+	ap.add_argument("--band", nargs=2, type=float, default=[7.0, 7.3], metavar=("LO", "HI"), help="MHz to search")
+	ap.add_argument("--rate", type=float, default=500000, help="rspdx raw sample rate, S/s (SSB modes)")
+	ap.add_argument("--offset", type=float, default=10000, help="rspdx LO above the dial, Hz")
 	ap.add_argument("--block", type=float, default=15, help="seconds per block, aligned to UTC when live")
 	ap.add_argument("--nfft", type=int, default=65536, help="FFT size: 7.6 Hz bins, 131 ms frames at 500 kS/s")
 	ap.add_argument("--thresh", type=float, default=6, help="dB over the floor to count as signal")
@@ -162,10 +166,10 @@ def main():
 	ap.add_argument("--dc-hz", type=float, default=100, help="ignore this close to the LO (the RSPdx's center spike)")
 	ap.add_argument("--min-cells", type=int, default=8, help="smallest detection, in time x frequency cells")
 	ap.add_argument("--png", default="blocks", help="directory for block PNGs ('' for none)")
-	ap.add_argument("-a", "--ant", choices="abc", help="antenna port")
-	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state")
-	ap.add_argument("--vol", type=float, help="rspdx speaker volume 0-2")
-	ap.add_argument("-v", "--verbose", action="store_true")
+	ap.add_argument("-a", "--ant", choices="abc", help="antenna port (rspdx starts on a)")
+	ap.add_argument("-g", "--gain", nargs=2, type=int, metavar=("IF", "LNA"), help="IF reduction 20-59, LNA state (rspdx starts at 50 5)")
+	ap.add_argument("--vol", type=float, help="rspdx speaker volume 0-2 (rspdx starts at 0.10)")
+	ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
 	a = ap.parse_args()
 	logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(message)s")
 	signal.signal(signal.SIGTERM, interrupt)
